@@ -1,0 +1,15 @@
+<?php
+require_once 'functions.php'; require_roles(['admin','manager','staff']); verify_csrf();$products=$pdo->query('SELECT id,name FROM products ORDER BY name')->fetchAll();$error='';
+if($_SERVER['REQUEST_METHOD']==='POST'){
+ try{$pid=(int)$_POST['product_id'];$qty=(float)$_POST['quantity'];$cost=(float)$_POST['cost'];if($qty<=0||$cost<0)throw new Exception('Enter a valid quantity and cost.');
+ $pdo->beginTransaction();$s=$pdo->prepare('SELECT id FROM products WHERE id=? FOR UPDATE');$s->execute([$pid]);if(!$s->fetch())throw new Exception('Product not found.');
+ $total=$qty*$cost;$pdo->prepare('INSERT INTO purchases(supplier_name,supplier_phone,invoice_no,total,purchased_by) VALUES(?,?,?,?,?)')->execute([trim($_POST['supplier']),trim($_POST['phone']),trim($_POST['invoice']),$total,user()['id']]);$purchase=(int)$pdo->lastInsertId();
+ $pdo->prepare('INSERT INTO purchase_items(purchase_id,product_id,quantity,unit_cost,line_total) VALUES(?,?,?,?,?)')->execute([$purchase,$pid,$qty,$cost,$total]);
+ $pdo->prepare('UPDATE products SET quantity=quantity+?,cost_price=? WHERE id=?')->execute([$qty,$cost,$pid]);
+ $pdo->prepare("INSERT INTO stock_movements(product_id,movement_type,quantity_change,reference_id,note,user_id) VALUES(?,'purchase',?,?,?,?)")->execute([$pid,$qty,$purchase,'Supplier purchase',user()['id']]);$pdo->commit();notify_owners($pdo,'New stock purchase recorded. Total KSh '.number_format($total,2));header('Location: purchases.php?done=1');exit;
+ }catch(Throwable $e){if($pdo->inTransaction())$pdo->rollBack();$error=$e->getMessage();}
+}
+$recent=$pdo->query('SELECT p.*,u.name staff FROM purchases p JOIN users u ON u.id=p.purchased_by ORDER BY p.id DESC LIMIT 30')->fetchAll();page_header('Purchases');?>
+<div class="hero"><div><p class="eyebrow">SUPPLIERS & RESTOCKING</p><h1>Record purchases</h1></div></div><?php if($error):?><p class="error"><?=h($error)?></p><?php endif;?><?php if(isset($_GET['done'])):?><p class="success">Purchase saved and stock increased.</p><?php endif;?>
+<section class="panel"><form method="post" class="formgrid"><input type="hidden" name="csrf" value="<?=h(csrf_token())?>"><label>Product<select name="product_id"><?php foreach($products as $p):?><option value="<?=$p['id']?>"><?=h($p['name'])?></option><?php endforeach;?></select></label><label>Quantity<input type="number" step="0.01" min="0.01" name="quantity" required></label><label>Unit cost (KSh)<input type="number" step="0.01" name="cost" required></label><label>Supplier<input name="supplier" required></label><label>Supplier phone<input name="phone"></label><label>Invoice number<input name="invoice"></label><div><button>Save purchase</button></div></form></section>
+<section class="panel"><h2>Recent purchases</h2><div class="tablewrap"><table><tr><th>Supplier</th><th>Invoice</th><th>Date</th><th>Total</th><th>Recorded by</th></tr><?php foreach($recent as $r):?><tr><td><?=h($r['supplier_name'])?></td><td><?=h($r['invoice_no'])?></td><td><?=h($r['purchased_at'])?></td><td>KSh <?=number_format($r['total'],2)?></td><td><?=h($r['staff'])?></td></tr><?php endforeach;?></table></div></section><?php page_footer();?>
